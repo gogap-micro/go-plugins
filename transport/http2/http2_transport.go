@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	gogapTLS "github.com/gogap/misc/lib/tls"
 	"github.com/micro/go-micro/transport"
+	mls "github.com/micro/misc/lib/tls"
 	netHTTP2 "golang.org/x/net/http2"
 )
 
@@ -28,6 +28,12 @@ func NewTransport(opts ...transport.Option) *http2Transport {
 	for _, o := range opts {
 		o(&options)
 	}
+
+	tlsConfig := options.TLSConfig
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{}
+	}
+
 	return &http2Transport{
 		opts: options,
 		clientPool: sync.Pool{
@@ -39,9 +45,7 @@ func NewTransport(opts ...transport.Option) *http2Transport {
 		secureClientPool: sync.Pool{
 			New: func() interface{} {
 				trans := &http.Transport{
-					TLSClientConfig: &tls.Config{
-						InsecureSkipVerify: isInsecureSkipVerify(options.Context),
-					},
+					TLSClientConfig: tlsConfig,
 				}
 
 				if err := netHTTP2.ConfigureTransport(trans); err != nil {
@@ -99,12 +103,9 @@ func (p *http2Transport) Listen(addr string, opts ...transport.ListenOption) (h2
 
 	var netListener net.Listener
 
-	var cert, key []byte
-
 	tlsConfig := p.opts.TLSConfig
-	caConf := getCAConfig(p.opts.Context)
 
-	if p.opts.Secure {
+	if p.opts.Secure || p.opts.TLSConfig != nil {
 
 		if tlsConfig == nil {
 			var hosts []string
@@ -116,19 +117,13 @@ func (p *http2Transport) Listen(addr string, opts ...transport.ListenOption) (h2
 				}
 			}
 
-			if cert, key, err = gogapTLS.GenerateCertificate(
-				gogapTLS.Host(hosts...),
-				gogapTLS.CACertFromFile(caConf.certfile, caConf.keyfile),
-			); err != nil {
-				return
+			// generate a certificate
+			cert, err := mls.Certificate(hosts...)
+			if err != nil {
+				return nil, err
 			}
 
-			var cer tls.Certificate
-			if cer, err = tls.X509KeyPair(cert, key); err != nil {
-				return
-			}
-
-			tlsConfig = &tls.Config{Certificates: []tls.Certificate{cer}}
+			tlsConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 		}
 
 		fn := func(addr string) (net.Listener, error) {
