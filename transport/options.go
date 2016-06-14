@@ -16,7 +16,8 @@ type TLSOptions struct {
 
 	Host []string
 
-	CACert, CAKey string
+	CACert, CAKey     string
+	Certfile, Keyfile string
 
 	CommonName         string
 	Locality, Province []string
@@ -45,6 +46,20 @@ func TLSCACertFromEnv(cert, key string) TLSOption {
 	return func(o *TLSOptions) {
 		o.CACert = os.Getenv(cert)
 		o.CAKey = os.Getenv(key)
+	}
+}
+
+func TLSCert(certfile, keyfile string) TLSOption {
+	return func(o *TLSOptions) {
+		o.Certfile = certfile
+		o.Keyfile = keyfile
+	}
+}
+
+func TLSCertFromEnv(cert, key string) TLSOption {
+	return func(o *TLSOptions) {
+		o.Certfile = os.Getenv(cert)
+		o.Keyfile = os.Getenv(key)
 	}
 }
 
@@ -211,39 +226,29 @@ func TLSConfig(opts ...TLSOption) microTransport.Option {
 			opt(&tlsOpts)
 		}
 
+		var cer tls.Certificate
+		var err error
+		var certLoaded bool
+
+		if len(tlsOpts.Certfile) != 0 && len(tlsOpts.Keyfile) != 0 {
+			if cer, err = tls.LoadX509KeyPair(tlsOpts.Certfile, tlsOpts.Keyfile); err != nil {
+				panic(err)
+			}
+
+			certLoaded = true
+		}
+
 		var config *tls.Config
 
 		// client-side
 		if !tlsOpts.IsServerCert {
 			config = &tls.Config{
+				Certificates:       []tls.Certificate{cer},
 				InsecureSkipVerify: tlsOpts.InsecureSkipVerify,
 			}
 
 			o.TLSConfig = config
 			return
-		}
-
-		// server-side
-		cert, key, err := gogapTLS.GenerateCertificate(
-			gogapTLS.CACertFromFile(tlsOpts.CACert, tlsOpts.CAKey),
-			gogapTLS.Host(tlsOpts.Host...),
-			gogapTLS.CommonName(tlsOpts.CommonName),
-			gogapTLS.Organization(tlsOpts.Organization...),
-			gogapTLS.OrganizationalUnit(tlsOpts.OrganizationalUnit...),
-			gogapTLS.Country(tlsOpts.Country...),
-			gogapTLS.Locality(tlsOpts.Locality...),
-			gogapTLS.Province(tlsOpts.Province...),
-			gogapTLS.BitSize(tlsOpts.BitSize),
-			gogapTLS.IsServerCert(tlsOpts.IsServerCert),
-		)
-
-		var cer tls.Certificate
-		if cer, err = tls.X509KeyPair(cert, key); err != nil {
-			return
-		}
-
-		if err != nil {
-			panic(err)
 		}
 
 		var rootCAs, clientCAs *x509.CertPool
@@ -253,6 +258,27 @@ func TLSConfig(opts ...TLSOption) microTransport.Option {
 
 		if clientCAs, err = gogapTLS.LoadCertificates(tlsOpts.ClientCAs...); err != nil {
 			panic(err)
+		}
+
+		// server-side
+
+		if !certLoaded {
+			cert, key, err := gogapTLS.GenerateCertificate(
+				gogapTLS.CACertFromFile(tlsOpts.CACert, tlsOpts.CAKey),
+				gogapTLS.Host(tlsOpts.Host...),
+				gogapTLS.CommonName(tlsOpts.CommonName),
+				gogapTLS.Organization(tlsOpts.Organization...),
+				gogapTLS.OrganizationalUnit(tlsOpts.OrganizationalUnit...),
+				gogapTLS.Country(tlsOpts.Country...),
+				gogapTLS.Locality(tlsOpts.Locality...),
+				gogapTLS.Province(tlsOpts.Province...),
+				gogapTLS.BitSize(tlsOpts.BitSize),
+				gogapTLS.IsServerCert(tlsOpts.IsServerCert),
+			)
+
+			if cer, err = tls.X509KeyPair(cert, key); err != nil {
+				return
+			}
 		}
 
 		config = &tls.Config{
